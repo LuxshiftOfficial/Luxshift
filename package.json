@@ -1,6 +1,6 @@
 {
   "name": "luxshift",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "LuxShift desktop prototype",
   "main": "main.js",
   "author": "LuxshiftOfficial",
@@ -37,7 +37,8 @@
       "!.git/**",
       "!.github/**",
       "!.gitignore",
-      "!README.md"
+      "!README.md",
+      "assets/nightshift-control"   // ensure the native Night Shift helper is packaged
     ],
     "mac": {
       "category": "public.app-category.healthcare-fitness",
