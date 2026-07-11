@@ -1,6 +1,6 @@
 {
   "name": "luxshift",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "LuxShift desktop prototype",
   "main": "main.js",
   "author": "LuxshiftOfficial",
@@ -11,7 +11,7 @@
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --dir --mac --universal",
-    "dist": "electron-builder --mac --universal"
+    "dist": "electron-builder --mac --universal && node scripts/organize-build.js"
   },
   "devDependencies": {
     "electron": "32.3.3",

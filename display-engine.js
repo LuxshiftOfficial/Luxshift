@@ -438,8 +438,16 @@ function makeNormalState(windDownMinutes) {
   };
 }
 
-function getCurrentState(prefs, schedule) {
-  return computeWindDownState(prefs, schedule);
+function getCurrentState() {
+  // Use the live preference + active-schedule getters bound at startEngine()
+  // so the tray status, the post-save state refresh, and the renderer all
+  // observe the real wind-down phase instead of a static "normal" snapshot.
+  if (typeof _getPreferences !== 'function') {
+    return makeNormalState(WIND_DOWN_MINUTES);
+  }
+  const scheduleResult = typeof _getActiveSchedule === 'function' ? _getActiveSchedule() : null;
+  const schedule = scheduleResult?.schedule || null;
+  return computeWindDownState(_getPreferences(), schedule);
 }
 
 module.exports = { startEngine, stopEngine, getCurrentState, applyNightShift };

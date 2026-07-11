@@ -339,6 +339,12 @@ ipcMain.handle('luxshift:archive-expired-schedule', async () => {
   return result;
 });
 
+// Wind-down state
+// Lets the renderer render the overlay immediately on startup and right
+// after saving preferences, instead of waiting up to 60s for the next
+// display-engine tick. Matches the getWindDownState bridge in preload.js.
+ipcMain.handle('luxshift:get-winddown-state', async () => displayEngine.getCurrentState());
+
 // Location / environment & notifications (unchanged)
 ipcMain.handle('luxshift:search-location', async (_event, query) => {
   const search = String(query || '').trim();

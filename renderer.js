@@ -1,14 +1,3 @@
-// Debug: confirm API bridge presence
-if (window.luxshiftAPI) { console.log('✅ luxshiftAPI is available'); } else { console.warn('⚠️ luxshiftAPI is MISSING – UI actions will be inert'); }
-// Attach debug logs to key buttons
-const _debugAttach = (id, name) => { const el = document.getElementById(id); if (el) { el.addEventListener('click', () => console.log('Button '+name+' clicked')); } };
-_debugAttach('parseBtn','Parse');
-_debugAttach('fillBtn','Fill');
-_debugAttach('clearBtn','Clear');
-_debugAttach('saveSettingsBtn','Save Settings');
-_debugAttach('searchLocationBtn','Search Location');
-_debugAttach('useDeviceLocationBtn','Use Device Location');
-
 const input = document.getElementById('input');
 const lateChangesInput = document.getElementById('lateChangesInput');
 const preview = document.getElementById('preview');
@@ -303,6 +292,18 @@ function wireUI() {
   saveSettingsBtn?.addEventListener('click', saveSettings);
   searchLocationBtn?.addEventListener('click', searchManualLocation);
   useDeviceLocationBtn?.addEventListener('click', clearManualLocationAndReload);
+
+  // Permission onboarding — wired in the renderer so the buttons are not
+  // blocked by the Content-Security-Policy (script-src 'self' forbids the
+  // inline handlers that were here before).
+  const onboardingOpenSettingsBtn = document.getElementById('onboarding-open-settings-btn');
+  const onboardingSkipBtn = document.getElementById('onboarding-skip-btn');
+  onboardingOpenSettingsBtn?.addEventListener('click', async () => {
+    try { await window.luxshiftAPI?.requestAccessibility?.(); } catch (_) {}
+  });
+  onboardingSkipBtn?.addEventListener('click', () => {
+    document.getElementById('permission-onboarding')?.classList.remove('visible');
+  });
 
   locationSearchInput?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
