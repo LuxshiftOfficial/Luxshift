@@ -10,11 +10,11 @@
   },
   "scripts": {
     "start": "electron .",
-    "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "pack": "electron-builder --dir --mac --universal",
+    "dist": "electron-builder --mac --universal"
   },
   "devDependencies": {
-    "electron": "32.2.7",
+    "electron": "32.3.3",
     "electron-builder": "^24.13.3"
   },
   "dependencies": {
@@ -41,18 +41,8 @@
       "category": "public.app-category.healthcare-fitness",
       "minimumSystemVersion": "10.15.0",
       "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "universal"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "universal"
-          ]
-        }
+        "dmg",
+        "zip"
       ]
     }
   }
