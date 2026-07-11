@@ -1,6 +1,6 @@
 {
   "name": "luxshift",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "LuxShift desktop prototype",
   "main": "main.js",
   "author": "LuxshiftOfficial",
@@ -38,6 +38,7 @@
       "!.github/**",
       "!.gitignore",
       "!README.md",
+      "preload.js",
       "assets/nightshift-control"
     ],
     "mac": {
