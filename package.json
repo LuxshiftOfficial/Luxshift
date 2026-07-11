@@ -19,7 +19,9 @@
   },
   "dependencies": {
     "brightness": "^2.2.0",
+    "cors": "^2.8.6",
     "electron-store": "^8.1.0",
+    "express": "^5.2.1",
     "suncalc": "^1.9.0"
   },
   "build": {

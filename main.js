@@ -9,9 +9,9 @@ const {
   dialog,
   shell
 } = require('electron');
+
 const path = require('path');
 const PreferencesStore = require('electron-store').default;
-const brightness = require('brightness');
 const {
   getActiveSchedule,
   saveActiveSchedule,
@@ -19,7 +19,6 @@ const {
   archiveExpiredActiveSchedule
 } = require('./schedule-store.js');
 
-// TODO: replace with your real GitHub repo once created, e.g. 'yourusername/luxshift'
 const GITHUB_REPO = 'LuxshiftOfficial/Luxshift';
 
 let preferencesStore;
@@ -28,45 +27,43 @@ let tray = null;
 let windDownInterval = null;
 let lastWindDownSnapshot = null;
 let lastSunlightNudgeAt = 0;
-let baseDisplayBrightness = null;
-let lastAppliedBrightness = null;
-let brightnessAvailable = true;
 let isQuitting = false;
 
-function loadServices() {
-  return require(path.join(__dirname, 'llm', 'schedule-service.js'));
-}
+const DEFAULT_PREFERENCES = {
+  bedtimeTarget: '00:30',
+  wakeTarget: '07:30',
+  windDownMinutes: 90,
+  preferredLocationName: '',
+  preferredLocation: null,
+  timeFormat: '12h',
+  timeFormatChosen: false
+};
 
 function getTrayIcon() {
-  const iconPathPng = path.join(__dirname, 'assets', 'tray-iconTemplate.png');
-  const iconPathAltPng = path.join(__dirname, 'tray-icon.png');
+  const templatePath = path.join(__dirname, 'assets', 'tray-iconTemplate.png');
+  const alternatePath = path.join(__dirname, 'assets', 'tray-icon.png');
 
-  let image = nativeImage.createEmpty();
+  for (const iconPath of [templatePath, alternatePath]) {
+    try {
+      const image = nativeImage.createFromPath(iconPath);
+      if (!image.isEmpty()) return image.resize({ width: 18, height: 18 });
+    } catch (_error) {}
+  }
 
-  try {
-    image = nativeImage.createFromPath(iconPathPng);
-    if (!image.isEmpty()) return image.resize({ width: 18, height: 18 });
-  } catch (_error) {}
-
-  try {
-    image = nativeImage.createFromPath(iconPathAltPng);
-    if (!image.isEmpty()) return image.resize({ width: 18, height: 18 });
-  } catch (_error) {}
-
-  const fallbackSvg = `
+  const svg = `
     <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
-      <rect x="3" y="3" width="12" height="12" rx="4" fill="white"/>
-      <path d="M6 11.8V6.2h1.4v4.4H12v1.2H6z" fill="black"/>
+      <rect x="2" y="2" width="14" height="14" rx="4" fill="white"/>
+      <path d="M6 5.4h1.5v5.1h4.7V12H6V5.4Z" fill="black"/>
     </svg>
   `.trim();
 
-  return nativeImage.createFromDataURL(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(fallbackSvg)}`);
+  return nativeImage.createFromDataURL(
+    `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+  );
 }
 
 function createWindow() {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    return mainWindow;
-  }
+  if (mainWindow && !mainWindow.isDestroyed()) return mainWindow;
 
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -122,7 +119,6 @@ function showMainWindow() {
 
   win.show();
   win.focus();
-
   return win;
 }
 
@@ -135,9 +131,10 @@ function hideMainWindow() {
 function toggleMainWindow() {
   if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
     hideMainWindow();
-  } else {
-    showMainWindow();
+    return;
   }
+
+  showMainWindow();
 }
 
 function getAllWindows() {
@@ -151,19 +148,15 @@ function broadcast(channel, payload) {
 }
 
 function getPreferences() {
-  return preferencesStore?.store || {
-    bedtimeTarget: '00:30',
-    wakeTarget: '07:30',
-    windDownMinutes: 90,
-    preferredLocationName: '',
-    preferredLocation: null,
-    timeFormat: '12h',
-    timeFormatChosen: false
+  return {
+    ...DEFAULT_PREFERENCES,
+    ...(preferencesStore?.store || {})
   };
 }
 
 function normalizeHHMM(value, fallback) {
   if (typeof value !== 'string') return fallback;
+
   const match = value.trim().match(/^(\d{1,2}):(\d{2})$/);
   if (!match) return fallback;
 
@@ -176,8 +169,31 @@ function normalizeHHMM(value, fallback) {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 }
 
+function normalizeLocation(value) {
+  if (!value || typeof value !== 'object') return null;
+
+  const latitude = Number(value.latitude);
+  const longitude = Number(value.longitude);
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+
+  return {
+    id: typeof value.id === 'string' ? value.id : `${latitude},${longitude}`,
+    name: String(value.name || '').trim(),
+    latitude,
+    longitude,
+    timezone: typeof value.timezone === 'string' ? value.timezone : null,
+    country: typeof value.country === 'string' ? value.country : null,
+    admin1: typeof value.admin1 === 'string' ? value.admin1 : null
+  };
+}
+
 function buildSafePreferences(payload = {}) {
   const current = getPreferences();
+  const requestedLocation =
+    payload?.preferredLocation === null
+      ? null
+      : normalizeLocation(payload?.preferredLocation) || current.preferredLocation;
 
   return {
     bedtimeTarget: normalizeHHMM(payload?.bedtimeTarget, current.bedtimeTarget),
@@ -193,127 +209,100 @@ function buildSafePreferences(payload = {}) {
     ),
     preferredLocationName:
       typeof payload?.preferredLocationName === 'string'
-        ? payload.preferredLocationName
+        ? payload.preferredLocationName.trim()
         : current.preferredLocationName,
-    preferredLocation:
-      payload?.preferredLocation && typeof payload.preferredLocation === 'object'
-        ? payload.preferredLocation
-        : payload?.preferredLocation === null
-          ? null
-          : current.preferredLocation,
-    timeFormat:
-      payload?.timeFormat === '24h'
-        ? '24h'
-        : payload?.timeFormat === '12h'
-          ? '12h'
-          : current.timeFormat
+    preferredLocation: requestedLocation,
+    timeFormat: payload?.timeFormat === '24h' ? '24h' : '12h',
+    timeFormatChosen: Boolean(payload?.timeFormatChosen ?? current.timeFormatChosen)
   };
 }
 
-function formatClockLabel(hhmm, use24h = false) {
-  if (!hhmm) return '';
-  const [hours, minutes] = hhmm.split(':');
-  const h = Number(hours);
-  const m = Number(minutes);
+function parseHHMM(value) {
+  const normalized = normalizeHHMM(value, null);
+  if (!normalized) return null;
 
-  if (!Number.isInteger(h) || !Number.isInteger(m)) return hhmm;
-
-  if (use24h) return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-
-  const period = h >= 12 ? 'PM' : 'AM';
-  const displayH = h % 12 === 0 ? 12 : h % 12;
-
-  return `${displayH}:${String(m).padStart(2, '0')} ${period}`;
+  const [hours, minutes] = normalized.split(':').map(Number);
+  return hours * 60 + minutes;
 }
 
-function minutesUntilClockTime(hhmm, now = new Date()) {
-  if (!hhmm) return null;
-  const [hours, minutes] = hhmm.split(':');
-  const targetH = Number(hours);
-  const targetM = Number(minutes);
+function formatClockLabel(hhmm, use24h = false) {
+  const normalized = normalizeHHMM(hhmm, null);
+  if (!normalized) return '';
 
-  if (!Number.isInteger(targetH) || !Number.isInteger(targetM)) return null;
-  if (targetH < 0 || targetH > 23 || targetM < 0 || targetM > 59) return null;
+  const [hours, minutes] = normalized.split(':').map(Number);
 
-  const nowH = now.getHours();
-  const nowM = now.getMinutes();
+  if (use24h) {
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+  }
 
-  const nowMinutes = nowH * 60 + nowM;
-  const targetMinutes = targetH * 60 + targetM;
+  const period = hours >= 12 ? 'PM' : 'AM';
+  const displayHours = hours % 12 === 0 ? 12 : hours % 12;
 
-  let diff = targetMinutes - nowMinutes;
-  if (diff < 0) diff += 24 * 60;
+  return `${displayHours}:${String(minutes).padStart(2, '0')} ${period}`;
+}
 
-  return diff;
+function resolveBedtimeMinutes(prefs, schedule) {
+  const scheduleBlocks = Array.isArray(schedule?.parsedBlocks)
+    ? schedule.parsedBlocks
+    : [];
+
+  const sleepStarts = scheduleBlocks
+    .filter((block) => block?.type === 'sleep' || block?.type === 'unwind')
+    .map((block) => parseHHMM(block?.start))
+    .filter((value) => value !== null);
+
+  if (sleepStarts.length) {
+    return Math.max(...sleepStarts);
+  }
+
+  const scheduleEnd = parseHHMM(schedule?.endTime);
+  if (scheduleEnd !== null) {
+    return scheduleEnd;
+  }
+
+  return parseHHMM(prefs?.bedtimeTarget);
 }
 
 function computeWindDownState(now = new Date()) {
   const prefs = getPreferences();
-  const scheduleResult = getActiveSchedule();
-  const schedule = scheduleResult?.schedule || null;
+  const activeScheduleResult = getActiveSchedule();
+  const schedule = activeScheduleResult?.schedule || null;
 
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
-
-  const windDownMinutes =
-    Number(prefs?.windDownMinutes) || 90;
-
-  const bedtimeTarget = prefs?.bedtimeTarget || null;
-  const wakeTarget = prefs?.wakeTarget || null;
-
-  if (!bedtimeTarget && !wakeTarget) {
-    return {
-      intensity: 0,
-      minutesToBedtime: null,
-      windDownMinutes,
-      phase: 'normal',
-      bedtimeDisplay: 'Not set'
-    };
-  }
-
-  let bedtimeMinutes = null;
-
-  if (bedtimeTarget) {
-    const [hours, minutes] = bedtimeTarget.split(':');
-    const h = Number(hours);
-    const m = Number(minutes);
-    if (Number.isInteger(h) && Number.isInteger(m) && h >= 0 && h <= 23 && m >= 0 && m <= 59) {
-      bedtimeMinutes = h * 60 + m;
-    }
-  } else if (wakeTarget) {
-    const [hours, minutes] = wakeTarget.split(':');
-    const h = Number(hours);
-    const m = Number(minutes);
-    if (Number.isInteger(h) && Number.isInteger(m) && h >= 0 && h <= 23 && m >= 0 && m <= 59) {
-      bedtimeMinutes = h * 60 + m - 90;
-    }
-  }
+  const windDownMinutes = Number(prefs.windDownMinutes) || 90;
+  const bedtimeMinutes = resolveBedtimeMinutes(prefs, schedule);
+  const bedtimeLabel = formatClockLabel(
+    prefs.bedtimeTarget,
+    prefs.timeFormat === '24h'
+  );
 
   if (bedtimeMinutes === null) {
     return {
       intensity: 0,
       minutesToBedtime: null,
       windDownMinutes,
+      targetBrightness: 1,
       phase: 'normal',
+      bedtimeLabel: null,
       bedtimeDisplay: 'Not set'
     };
   }
 
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
   let minutesToBedtime = bedtimeMinutes - nowMinutes;
 
   if (minutesToBedtime < -(24 * 60 - windDownMinutes)) {
     minutesToBedtime += 24 * 60;
   }
 
-  const bedtimeDisplay = formatClockLabel(bedtimeTarget || '');
-
   if (minutesToBedtime < 0 && minutesToBedtime >= -30) {
     return {
-      intensity: 1.0,
+      intensity: 1,
       minutesToBedtime: 0,
       windDownMinutes,
       targetBrightness: 0.35,
       phase: 'bedtime',
-      bedtimeDisplay
+      bedtimeLabel: prefs.bedtimeTarget,
+      bedtimeDisplay: bedtimeLabel
     };
   }
 
@@ -322,9 +311,10 @@ function computeWindDownState(now = new Date()) {
       intensity: 0,
       minutesToBedtime: null,
       windDownMinutes,
-      targetBrightness: 1.0,
+      targetBrightness: 1,
       phase: 'normal',
-      bedtimeDisplay
+      bedtimeLabel: prefs.bedtimeTarget,
+      bedtimeDisplay: bedtimeLabel
     };
   }
 
@@ -333,278 +323,122 @@ function computeWindDownState(now = new Date()) {
       intensity: 0,
       minutesToBedtime,
       windDownMinutes,
-      targetBrightness: 1.0,
+      targetBrightness: 1,
       phase: minutesToBedtime <= windDownMinutes + 15 ? 'approaching' : 'normal',
-      bedtimeDisplay
+      bedtimeLabel: prefs.bedtimeTarget,
+      bedtimeDisplay: bedtimeLabel
     };
   }
 
-  const progress = 1 - (minutesToBedtime / windDownMinutes);
-  const intensity = progress * progress;
-
-  const targetBrightness = 1.0 - (intensity * (1.0 - 0.35));
+  const progress = 1 - minutesToBedtime / windDownMinutes;
+  const intensity = Number((progress * progress).toFixed(3));
 
   return {
     intensity,
     minutesToBedtime,
     windDownMinutes,
-    targetBrightness,
+    targetBrightness: Number((1 - intensity * 0.65).toFixed(3)),
     phase: 'winding-down',
-    bedtimeDisplay
+    bedtimeLabel: prefs.bedtimeTarget,
+    bedtimeDisplay: bedtimeLabel
   };
 }
 
-function windDownChanged(next, prev) {
-  if (!prev) return true;
+function windDownChanged(next, previous) {
+  if (!previous) return true;
+
   return (
-    next.phase !== prev.phase ||
-    Math.abs(next.intensity - prev.intensity) > 0.01
+    next.phase !== previous.phase ||
+    next.minutesToBedtime !== previous.minutesToBedtime ||
+    Math.abs(next.intensity - previous.intensity) >= 0.01
   );
 }
 
-async function brightnessGetAsync() {
-  if (!brightnessAvailable) return null;
-  try {
-    const value = await brightness.getBrightness();
-    return value;
-  } catch (_error) {
-    brightnessAvailable = false;
-    return null;
-  }
-}
-
-async function brightnessSetAsync(value) {
-  if (!brightnessAvailable) return;
-  try {
-    await brightness.setBrightness(value);
-  } catch (_error) {
-    brightnessAvailable = false;
-  }
-}
-
-async function ensureBaseBrightness() {
-  if (!brightnessAvailable) return;
-
-  try {
-    const value = await brightnessGetAsync();
-    if (value === null) {
-      brightnessAvailable = false;
-      return;
-    }
-    baseDisplayBrightness = value;
-    lastAppliedBrightness = value;
-  } catch (_error) {
-    brightnessAvailable = false;
-  }
-}
-
-async function applySystemBrightnessForState(state) {
-  if (!state || !brightnessAvailable) return;
-
-  try {
-    const target = state.targetBrightness || 1.0;
-    if (target < lastAppliedBrightness - 0.01 || target > lastAppliedBrightness + 0.01) {
-      await brightnessSetAsync(target);
-      lastAppliedBrightness = target;
-    }
-  } catch (_error) {
-    brightnessAvailable = false;
-  }
-}
-
-async function restoreBrightnessOnExit() {
-  if (!brightnessAvailable) return;
-  if (baseDisplayBrightness === null || lastAppliedBrightness === null) return;
-
-  try {
-    await brightnessSetAsync(baseDisplayBrightness);
-  } catch (_error) {
-    brightnessAvailable = false;
-  }
-}
-
-async function maybeEmitSunlightNudge(state) {
-  if (!state || state.phase !== 'bedtime') return;
+function maybeEmitSunlightNudge(state) {
+  if (state?.phase !== 'bedtime') return;
 
   const now = Date.now();
-  if (now - lastSunlightNudgeAt < 1000 * 60 * 60 * 10) return;
+  if (now - lastSunlightNudgeAt < 10 * 60 * 60 * 1000) return;
 
   const prefs = getPreferences();
-  const hasManualLocation = Boolean(
-    prefs.preferredLocation?.latitude && prefs.preferredLocation?.longitude
+  const hasLocation = Boolean(
+    prefs.preferredLocation?.latitude &&
+    prefs.preferredLocation?.longitude
   );
 
   lastSunlightNudgeAt = now;
 
   broadcast('luxshift:sunlight-nudge', {
     title: 'Tomorrow morning light reminder',
-    body: hasManualLocation
-      ? 'Try to get some natural light soon after waking to help reinforce your sleep schedule.'
-      : 'Tomorrow morning, try to get natural light soon after waking. Adding a saved location can make LuxShift more context-aware.',
+    body: hasLocation
+      ? 'Try to get natural light soon after waking to support tonight’s sleep schedule.'
+      : 'Try to get natural light soon after waking. Add a saved location for more contextual nudges.',
     canGoOut: true,
     emittedAt: new Date(now).toISOString()
   });
 }
 
-/* ---------- Update check (manual, non-auto) ---------- */
-
-function parseVersionParts(version) {
-  return String(version || '0.0.0')
-    .replace(/^v/i, '')
-    .split('.')
-    .map((part) => Number.parseInt(part, 10) || 0);
-}
-
-function compareVersions(a, b) {
-  const partsA = parseVersionParts(a);
-  const partsB = parseVersionParts(b);
-  const length = Math.max(partsA.length, partsB.length);
-
-  for (let i = 0; i < length; i++) {
-    const diff = (partsA[i] || 0) - (partsB[i] || 0);
-    if (diff !== 0) return diff > 0 ? 1 : -1;
-  }
-
-  return 0;
-}
-
-async function fetchLatestRelease() {
-  const url = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
-  const response = await fetch(url, {
-    headers: { Accept: 'application/vnd.github+json' }
-  });
-
-  if (!response.ok) {
-    throw new Error(`GitHub release lookup failed (${response.status}).`);
-  }
-
-  return response.json();
-}
-
-async function checkForUpdates(showFeedbackWhenUpToDate = false) {
-  try {
-    const release = await fetchLatestRelease();
-    const latestVersion = release?.tag_name || release?.name;
-    const currentVersion = app.getVersion();
-
-    if (!latestVersion) {
-      if (showFeedbackWhenUpToDate) {
-        dialog.showMessageBox({
-          type: 'info',
-          title: 'LuxShift Updates',
-          message: 'Could not determine the latest version right now.'
-        });
-      }
-      return;
-    }
-
-    const isNewer = compareVersions(latestVersion, currentVersion) > 0;
-
-    if (isNewer) {
-      const result = await dialog.showMessageBox({
-        type: 'info',
-        title: 'Update available',
-        message: `A new version of LuxShift is available (${latestVersion}).`,
-        detail: 'You are currently on an older version. Download the latest release to update.',
-        buttons: ['Download Update', 'Later'],
-        defaultId: 0,
-        cancelId: 1
-      });
-
-      if (result.response === 0) {
-        const releaseUrl =
-          release?.html_url || `https://github.com/${GITHUB_REPO}/releases/latest`;
-        shell.openExternal(releaseUrl);
-      }
-    } else if (showFeedbackWhenUpToDate) {
-      dialog.showMessageBox({
-        type: 'info',
-        title: 'LuxShift Updates',
-        message: `You're up to date (v${currentVersion}).`
-      });
-    }
-  } catch (error) {
-    if (showFeedbackWhenUpToDate) {
-      dialog.showMessageBox({
-        type: 'error',
-        title: 'LuxShift Updates',
-        message: 'Could not check for updates.',
-        detail: error?.message || 'Please check your internet connection and try again.'
-      });
-    }
-  }
-}
-
-/* ---------- Tray ---------- */
-
 function updateTrayMenu(state = null) {
   if (!tray) return;
 
-  const currentState = state || lastWindDownSnapshot || computeWindDownState();
-  const minutesLabel =
-    currentState?.minutesToBedtime === null || currentState?.minutesToBedtime === undefined
+  const current = state || lastWindDownSnapshot || computeWindDownState();
+
+  const status =
+    current.minutesToBedtime === null
       ? 'No bedtime set'
-      : currentState.minutesToBedtime <= 0
+      : current.minutesToBedtime <= 0
         ? 'Bedtime reached'
-        : `${currentState.minutesToBedtime}m to bedtime`;
+        : `${Math.round(current.minutesToBedtime)}m to bedtime`;
 
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: 'Open LuxShift',
-      click: () => showMainWindow()
-    },
-    {
-      label: 'Open Settings',
-      click: () => {
-        showMainWindow();
-        // If you add a settings section anchor (e.g. #settings) in index.html,
-        // you can navigate there here via renderer API later.
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: 'Open LuxShift',
+        click: showMainWindow
+      },
+      {
+        label: mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()
+          ? 'Hide Window'
+          : 'Show Window',
+        click: toggleMainWindow
+      },
+      { type: 'separator' },
+      {
+        label: `Mode: ${current.phase}`,
+        enabled: false
+      },
+      {
+        label: `Status: ${status}`,
+        enabled: false
+      },
+      {
+        label: `Bedtime: ${current.bedtimeDisplay || 'Not set'}`,
+        enabled: false
+      },
+      { type: 'separator' },
+      {
+        label: 'Check for Updates…',
+        click: () => checkForUpdates(true)
+      },
+      { type: 'separator' },
+      {
+        label: 'Quit LuxShift',
+        click: () => {
+          isQuitting = true;
+          app.quit();
+        }
       }
-    },
-    { type: 'separator' },
-    {
-      label: mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() ? 'Hide Window' : 'Show Window',
-      click: () => toggleMainWindow()
-    },
-    { type: 'separator' },
-    {
-      label: `Mode: ${currentState?.phase || 'normal'}`,
-      enabled: false
-    },
-    {
-      label: `Status: ${minutesLabel}`,
-      enabled: false
-    },
-    {
-      label: `Bedtime: ${currentState?.bedtimeDisplay || 'Not set'}`,
-      enabled: false
-    },
-    { type: 'separator' },
-    {
-      label: 'Check for Updates…',
-      click: () => checkForUpdates(true)
-    },
-    { type: 'separator' },
-    {
-      label: 'Quit LuxShift',
-      click: async () => {
-        isQuitting = true;
-        await restoreBrightnessOnExit();
-        app.quit();
-      }
-    }
-  ]);
+    ])
+  );
 
-  tray.setContextMenu(contextMenu);
-
-  const trayTitle =
-    currentState?.phase === 'winding-down'
+  const title =
+    current.phase === 'winding-down'
       ? 'LuxShift • Wind-down'
-      : currentState?.phase === 'bedtime'
+      : current.phase === 'bedtime'
         ? 'LuxShift • Bedtime'
         : 'LuxShift';
 
-  tray.setToolTip(trayTitle);
+  tray.setToolTip(title);
 }
 
 function createTray() {
@@ -613,10 +447,7 @@ function createTray() {
   tray = new Tray(getTrayIcon());
   tray.setIgnoreDoubleClickEvents(true);
 
-  tray.on('click', () => {
-    toggleMainWindow();
-  });
-
+  tray.on('click', toggleMainWindow);
   tray.on('right-click', () => {
     updateTrayMenu();
     tray.popUpContextMenu();
@@ -633,23 +464,16 @@ async function publishWindDownState(force = false) {
     lastWindDownSnapshot = state;
     broadcast('luxshift:winddown-state', state);
     updateTrayMenu(state);
+    maybeEmitSunlightNudge(state);
   }
 
-  if (state.phase !== 'normal') {
-    await applySystemBrightnessForState(state);
-  }
-
-  if (state.phase === 'bedtime') {
-    await maybeEmitSunlightNudge(state);
-  }
-
-  const latest = computeWindDownState();
-  updateTrayMenu(latest);
-  return latest;
+  return state;
 }
 
 function startWindDownEngine() {
-  if (windDownInterval) clearInterval(windDownInterval);
+  if (windDownInterval) {
+    clearInterval(windDownInterval);
+  }
 
   publishWindDownState(true).catch(() => {});
 
@@ -658,68 +482,107 @@ function startWindDownEngine() {
   }, 60 * 1000);
 }
 
-app.whenReady().then(async () => {
-  app.setName('LuxShift');
+function parseVersionParts(version) {
+  return String(version || '0.0.0')
+    .replace(/^v/i, '')
+    .split('.')
+    .map((part) => Number.parseInt(part, 10) || 0);
+}
 
-  preferencesStore = new PreferencesStore({
-    name: 'luxshift-preferences',
-    cwd: app.getPath('userData'),
-    defaults: {
-      bedtimeTarget: '00:30',
-      wakeTarget: '07:30',
-      windDownMinutes: 90,
-      preferredLocationName: '',
-      preferredLocation: null,
-      timeFormat: '12h',
-      timeFormatChosen: false
-    }
-  });
+function compareVersions(a, b) {
+  const aParts = parseVersionParts(a);
+  const bParts = parseVersionParts(b);
+  const length = Math.max(aParts.length, bParts.length);
 
-  await ensureBaseBrightness();
-  createWindow();
-  createTray();
-  startWindDownEngine();
-
-  // Silent check on startup — only interrupts the user if an update exists.
-  checkForUpdates(false).catch(() => {});
-
-  app.on('activate', () => {
-    showMainWindow();
-  });
-});
-
-app.on('before-quit', async () => {
-  isQuitting = true;
-
-  if (windDownInterval) {
-    clearInterval(windDownInterval);
-    windDownInterval = null;
+  for (let index = 0; index < length; index += 1) {
+    const difference = (aParts[index] || 0) - (bParts[index] || 0);
+    if (difference !== 0) return difference > 0 ? 1 : -1;
   }
 
-  await restoreBrightnessOnExit();
-});
+  return 0;
+}
 
-app.on('window-all-closed', (event) => {
-  event.preventDefault();
-});
+async function checkForUpdates(showFeedback = false) {
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
+      {
+        headers: {
+          Accept: 'application/vnd.github+json'
+        }
+      }
+    );
 
-ipcMain.handle('luxshift:get-preferences', async () => getPreferences());
-ipcMain.handle('luxshift:save-preferences', async (_event, payload) => {
-  const next = buildSafePreferences(payload);
-  preferencesStore.set(next);
-  const state = await publishWindDownState(true);
-  return { ok: true, preferences: getPreferences(), windDownState: state };
-});
+    if (!response.ok) {
+      throw new Error(`GitHub release lookup failed (${response.status}).`);
+    }
 
-ipcMain.handle('luxshift:search-location', async (_event, query) => {
-  const q = String(query || '').trim();
+    const release = await response.json();
+    const latestVersion = release?.tag_name || release?.name;
+    const currentVersion = app.getVersion();
 
-  if (q.length < 2) {
+    if (!latestVersion) {
+      if (showFeedback) {
+        await dialog.showMessageBox({
+          type: 'info',
+          title: 'LuxShift Updates',
+          message: 'Could not determine the latest version right now.'
+        });
+      }
+      return;
+    }
+
+    if (compareVersions(latestVersion, currentVersion) <= 0) {
+      if (showFeedback) {
+        await dialog.showMessageBox({
+          type: 'info',
+          title: 'LuxShift Updates',
+          message: `You’re up to date (v${currentVersion}).`
+        });
+      }
+      return;
+    }
+
+    const result = await dialog.showMessageBox({
+      type: 'info',
+      title: 'Update available',
+      message: `A new version of LuxShift is available (${latestVersion}).`,
+      detail: 'Download the newest release to update LuxShift.',
+      buttons: ['Download Update', 'Later'],
+      defaultId: 0,
+      cancelId: 1
+    });
+
+    if (result.response === 0) {
+      await shell.openExternal(
+        release?.html_url ||
+        `https://github.com/${GITHUB_REPO}/releases/latest`
+      );
+    }
+  } catch (error) {
+    if (showFeedback) {
+      await dialog.showMessageBox({
+        type: 'error',
+        title: 'LuxShift Updates',
+        message: 'Could not check for updates.',
+        detail: error?.message || 'Please check your internet connection and try again.'
+      });
+    }
+  }
+}
+
+async function searchLocation(query) {
+  const search = String(query || '').trim();
+
+  if (search.length < 2) {
     return { ok: false, error: 'Please enter at least 2 characters.' };
   }
 
   try {
-    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=6&language=en&format=json`;
+    const url =
+      `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(search)}` +
+      '&count=6&language=en&format=json';
+
     const response = await fetch(url);
 
     if (!response.ok) {
@@ -727,25 +590,29 @@ ipcMain.handle('luxshift:search-location', async (_event, query) => {
     }
 
     const data = await response.json();
+
     const results = Array.isArray(data?.results)
       ? data.results.map((item) => ({
           id: `${item.latitude},${item.longitude}`,
-          name: [item.name, item.admin1, item.country].filter(Boolean).join(', '),
+          name: item.name || '',
+          admin1: item.admin1 || '',
+          country: item.country || '',
           latitude: item.latitude,
           longitude: item.longitude,
-          timezone: item.timezone || null,
-          country: item.country || null,
-          admin1: item.admin1 || null
+          timezone: item.timezone || null
         }))
       : [];
 
     return { ok: true, results };
   } catch (error) {
-    return { ok: false, error: error?.message || 'Location search failed.' };
+    return {
+      ok: false,
+      error: error?.message || 'Location search failed.'
+    };
   }
-});
+}
 
-ipcMain.handle('luxshift:get-environment', async (_event, coords) => {
+async function getEnvironment(coords) {
   const latitude = Number(coords?.latitude);
   const longitude = Number(coords?.longitude);
 
@@ -754,26 +621,102 @@ ipcMain.handle('luxshift:get-environment', async (_event, coords) => {
   }
 
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}&current=temperature_2m,apparent_temperature,cloud_cover,precipitation,weather_code,is_day&timezone=auto&forecast_days=1`;
+    const url =
+      `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(latitude)}` +
+      `&longitude=${encodeURIComponent(longitude)}` +
+      '&current=temperature_2m,apparent_temperature,cloud_cover,precipitation,weather_code,is_day' +
+      '&timezone=auto&forecast_days=1';
+
     const response = await fetch(url);
 
     if (!response.ok) {
-      return { ok: false, error: `Environment lookup failed (${response.status}).` };
+      return {
+        ok: false,
+        error: `Environment lookup failed (${response.status}).`
+      };
     }
 
     const data = await response.json();
+    const current = data?.current || {};
+
     return {
       ok: true,
+      weather: {
+        temperature2m: current.temperature_2m,
+        apparentTemperature: current.apparent_temperature,
+        cloudcover: current.cloud_cover,
+        precipitation: current.precipitation,
+        weatherCode: current.weather_code,
+        isday: current.is_day
+      },
       environment: {
         latitude,
         longitude,
         timezone: data?.timezone || null,
-        current: data?.current || null
+        current
       }
     };
   } catch (error) {
-    return { ok: false, error: error?.message || 'Environment lookup failed.' };
+    return {
+      ok: false,
+      error: error?.message || 'Environment lookup failed.'
+    };
   }
+}
+
+app.whenReady().then(async () => {
+  app.setName('LuxShift');
+
+  preferencesStore = new PreferencesStore({
+    name: 'luxshift-preferences',
+    cwd: app.getPath('userData'),
+    defaults: DEFAULT_PREFERENCES
+  });
+
+  archiveExpiredActiveSchedule();
+  createWindow();
+  createTray();
+  startWindDownEngine();
+
+  checkForUpdates(false).catch(() => {});
+
+  app.on('activate', showMainWindow);
+});
+
+app.on('before-quit', () => {
+  isQuitting = true;
+
+  if (windDownInterval) {
+    clearInterval(windDownInterval);
+    windDownInterval = null;
+  }
+});
+
+app.on('window-all-closed', (event) => {
+  event.preventDefault();
+});
+
+ipcMain.handle('luxshift:get-preferences', async () => getPreferences());
+
+ipcMain.handle('luxshift:save-preferences', async (_event, payload) => {
+  const next = buildSafePreferences(payload);
+  preferencesStore.set(next);
+
+  const windDownState = await publishWindDownState(true);
+
+  return {
+    ok: true,
+    preferences: getPreferences(),
+    windDownState
+  };
+});
+
+ipcMain.handle('luxshift:search-location', async (_event, query) => {
+  return searchLocation(query);
+});
+
+ipcMain.handle('luxshift:get-environment', async (_event, coords) => {
+  return getEnvironment(coords);
 });
 
 ipcMain.handle('luxshift:notify', async (_event, payload) => {
@@ -781,31 +724,47 @@ ipcMain.handle('luxshift:notify', async (_event, payload) => {
     return { ok: false, error: 'Notifications are not supported on this device.' };
   }
 
-  const title = String(payload?.title || 'LuxShift').trim() || 'LuxShift';
-  const body = String(payload?.body || '').trim();
-
   try {
-    new Notification({ title, body }).show();
+    new Notification({
+      title: String(payload?.title || 'LuxShift').trim() || 'LuxShift',
+      body: String(payload?.body || '').trim()
+    }).show();
+
     return { ok: true };
   } catch (error) {
-    return { ok: false, error: error?.message || 'Notification failed.' };
+    return {
+      ok: false,
+      error: error?.message || 'Notification failed.'
+    };
   }
 });
 
-ipcMain.handle('luxshift:parse-schedule', async (_event, payload) => {
-  try {
-    const services = loadServices();
-    return await services.parseSchedule(payload?.text || '');
-  } catch (error) {
-    return { ok: false, error: error?.message || 'Schedule parsing failed.' };
-  }
+ipcMain.handle('luxshift:get-active-schedule', async () => {
+  return getActiveSchedule();
 });
 
-ipcMain.handle('luxshift:get-active-schedule', async () => getActiveSchedule());
-ipcMain.handle('luxshift:save-active-schedule', async (_event, payload) => saveActiveSchedule(payload));
-ipcMain.handle('luxshift:clear-active-schedule', async () => clearActiveSchedule());
-ipcMain.handle('luxshift:archive-expired-schedule', async () => archiveExpiredActiveSchedule());
-ipcMain.handle('luxshift:get-winddown-state', async () => publishWindDownState(true));
+ipcMain.handle('luxshift:save-active-schedule', async (_event, payload) => {
+  const result = saveActiveSchedule(payload);
+  await publishWindDownState(true);
+  return result;
+});
+
+ipcMain.handle('luxshift:clear-active-schedule', async () => {
+  const result = clearActiveSchedule();
+  await publishWindDownState(true);
+  return result;
+});
+
+ipcMain.handle('luxshift:archive-expired-schedule', async () => {
+  const result = archiveExpiredActiveSchedule();
+  await publishWindDownState(true);
+  return result;
+});
+
+ipcMain.handle('luxshift:get-winddown-state', async () => {
+  return publishWindDownState(true);
+});
+
 ipcMain.handle('luxshift:check-for-updates', async () => {
   await checkForUpdates(true);
   return { ok: true };

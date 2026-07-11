@@ -47,6 +47,29 @@ wireUI();
 renderInitialState();
 bootstrap();
 
+async function parseScheduleViaProxy(text) {
+  const response = await fetch('https://luxshift.onrender.com/parse-schedule', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text })
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data?.error || data?.details?.error || 'Proxy parsing failed.');
+  }
+
+  return {
+    summary: data?.summary || '',
+    blocks: Array.isArray(data?.blocks) ? data.blocks : [],
+    confidence: typeof data?.confidence === 'number' ? data.confidence : 0.9,
+    reasons: Array.isArray(data?.reasons) ? data.reasons : [],
+    source: 'nvidia-proxy',
+    unavailable: false
+  };
+}
+
 function applyWindDownState(state) {
   if (!overlayEl || !winddownBar || !winddownLabel) return;
 
@@ -526,7 +549,7 @@ async function handleParse() {
     .join('\n\n');
 
   try {
-    const result = await window.luxshiftAPI.parseSchedule(parseText);
+    const result = await parseScheduleViaProxy(parseText);
     renderParseResult(result);
     await persistCurrentSchedule(result);
   } catch (error) {
@@ -824,6 +847,18 @@ function getBlockTone(type) {
       return { name: 'break', label: 'Break' };
     case 'leisure':
       return { name: 'leisure', label: 'Leisure' };
+    case 'meal':
+      return { name: 'break', label: 'Meal' };
+    case 'exercise':
+      return { name: 'leisure', label: 'Exercise' };
+    case 'study':
+      return { name: 'work', label: 'Study' };
+    case 'personal':
+      return { name: 'general', label: 'Personal' };
+    case 'commute':
+      return { name: 'general', label: 'Commute' };
+    case 'other':
+      return { name: 'general', label: 'General' };
     default:
       return { name: 'general', label: 'General' };
   }
