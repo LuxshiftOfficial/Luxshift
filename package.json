@@ -3,20 +3,47 @@
   "version": "1.0.0",
   "description": "LuxShift desktop prototype",
   "main": "main.js",
-  "scripts": {
-    "start": "electron ."
-  },
+  "author": "LuxshiftOfficial",
   "repository": {
     "type": "git",
     "url": "https://github.com/LuxshiftOfficial/Luxshift.git"
   },
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
   "devDependencies": {
-    "electron": "^42.4.1"
+    "electron": "^42.4.1",
+    "electron-builder": "^24.13.3"
   },
   "dependencies": {
     "brightness": "^2.2.0",
     "electron-store": "^8.1.0",
     "suncalc": "^1.9.0"
+  },
+  "build": {
+    "appId": "com.luxshiftofficial.luxshift",
+    "productName": "LuxShift",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!dist/**",
+      "!node_modules/.cache/**",
+      "!.git/**",
+      "!.github/**",
+      "!.gitignore",
+      "!README.md"
+    ],
+    "mac": {
+      "category": "public.app-category.healthcare-fitness",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    }
   },
   "allowScripts": {
     "electron@37.10.3": true
