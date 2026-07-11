@@ -14,7 +14,7 @@
     "dist": "electron-builder"
   },
   "devDependencies": {
-    "electron": "^42.4.1",
+    "electron": "32.2.7",
     "electron-builder": "^24.13.3"
   },
   "dependencies": {
@@ -42,10 +42,8 @@
       "target": [
         "dmg",
         "zip"
-      ]
+      ],
+      "minimumSystemVersion": "10.15.0"
     }
-  },
-  "allowScripts": {
-    "electron@37.10.3": true
   }
 }
