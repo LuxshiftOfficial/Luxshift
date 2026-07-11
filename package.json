@@ -39,11 +39,21 @@
     ],
     "mac": {
       "category": "public.app-category.healthcare-fitness",
+      "minimumSystemVersion": "10.15.0",
       "target": [
-        "dmg",
-        "zip"
-      ],
-      "minimumSystemVersion": "10.15.0"
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
+      ]
     }
   }
 }
