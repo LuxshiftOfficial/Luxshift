@@ -1,6 +1,6 @@
 {
   "name": "luxshift",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "LuxShift desktop prototype",
   "main": "main.js",
   "author": "LuxshiftOfficial",
@@ -18,7 +18,6 @@
     "electron-builder": "^24.13.3"
   },
   "dependencies": {
-    "brightness": "^2.2.0",
     "cors": "^2.8.6",
     "electron-store": "^8.1.0",
     "express": "^5.2.1",

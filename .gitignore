@@ -2,6 +2,7 @@ node_modules/
 .DS_Store
 dist/
 out/
-*.lognvidia_env.rtf
+*.log
+nvidia_env.rtf
 *.env.rtf
 .env
