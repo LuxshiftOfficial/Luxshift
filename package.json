@@ -1,6 +1,6 @@
 {
   "name": "luxshift",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "LuxShift desktop app - reduce eye strain and protect sleep schedule when working late",
   "main": "main.js",
   "author": "LuxshiftOfficial",
